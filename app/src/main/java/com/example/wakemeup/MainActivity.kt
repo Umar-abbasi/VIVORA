@@ -1,25 +1,29 @@
 package com.example.wakemeup
 
-import android.app.AlarmManager
-import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.Button
-import android.widget.TimePicker
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import java.util.Calendar
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.example.wakemeup.data.AlarmDatabase
+import com.example.wakemeup.data.AlarmEntity
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var timePicker: TimePicker
-    private lateinit var setAlarmButton: Button
+
+    private lateinit var alarmsRecyclerView: RecyclerView
+    private lateinit var addAlarmFab: FloatingActionButton
+    private lateinit var adapter: AlarmAdapter
+    private lateinit var db: AlarmDatabase
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,17 +36,36 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        timePicker = findViewById(R.id.timePicker)
-        setAlarmButton = findViewById(R.id.setAlarmButton)
+        db = AlarmDatabase.getDatabase(this)
+        alarmsRecyclerView = findViewById(R.id.alarmsRecyclerView)
+        addAlarmFab = findViewById(R.id.addAlarmFab)
 
-        timePicker.setIs24HourView(true)
+        adapter = AlarmAdapter { alarm, isChecked ->
+            val updatedAlarm = alarm.copy(isActive = isChecked)
+            lifecycleScope.launch {
+                db.alarmDao().update(updatedAlarm)
+                rescheduleAlarms()
+            }
+        }
 
-        setAlarmButton.setOnClickListener {
-            checkPermissionsAndSetAlarm()
+        alarmsRecyclerView.adapter = adapter
+        alarmsRecyclerView.layoutManager = LinearLayoutManager(this)
+
+        addAlarmFab.setOnClickListener {
+            if (checkPermissions()) {
+                startActivity(Intent(this, AddAlarmActivity::class.java))
+            }
+        }
+
+        // Observe alarms
+        lifecycleScope.launch {
+            db.alarmDao().getAllAlarms().collect { alarms ->
+                adapter.setAlarms(alarms)
+            }
         }
     }
 
-    private fun checkPermissionsAndSetAlarm() {
+    private fun checkPermissions(): Boolean {
         if (!Settings.canDrawOverlays(this)) {
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -50,51 +73,24 @@ class MainActivity : AppCompatActivity() {
             )
             startActivity(intent)
             Toast.makeText(this, "Please grant 'Draw over other apps' permission", Toast.LENGTH_LONG).show()
-            return
+            return false
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val alarmManager = getSystemService(ALARM_SERVICE) as android.app.AlarmManager
             if (!alarmManager.canScheduleExactAlarms()) {
                 val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
                 startActivity(intent)
                 Toast.makeText(this, "Please grant 'Alarms & reminders' permission", Toast.LENGTH_LONG).show()
-                return
+                return false
             }
         }
-        
-        setAlarm()
+        return true
     }
 
-    private fun setAlarm() {
-        val calendar = Calendar.getInstance()
-        calendar.set(Calendar.HOUR_OF_DAY, timePicker.hour)
-        calendar.set(Calendar.MINUTE, timePicker.minute)
-        calendar.set(Calendar.SECOND, 0)
-        calendar.set(Calendar.MILLISECOND, 0)
-
-        if (calendar.timeInMillis <= System.currentTimeMillis()) {
-            calendar.add(Calendar.DAY_OF_YEAR, 1)
-        }
-
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, AlarmReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            calendar.timeInMillis,
-            pendingIntent
-        )
-        
-        val prefs = getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
-        prefs.edit().putLong("scheduledAlarmTimeMillis", calendar.timeInMillis).apply()
-
-        Toast.makeText(this, "Alarm set for ${calendar.time}", Toast.LENGTH_LONG).show()
+    private fun rescheduleAlarms() {
+        val intent = Intent(this, BootReceiver::class.java)
+        intent.action = "android.intent.action.BOOT_COMPLETED"
+        sendBroadcast(intent)
     }
 }

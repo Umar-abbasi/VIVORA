@@ -1,43 +1,64 @@
 package com.example.wakemeup
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.example.wakemeup.data.AlarmDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
-            val prefs = context.getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
-            val isAlarmActive = prefs.getBoolean("isAlarmActive", false)
-            val scheduledAlarmTimeMillis = prefs.getLong("scheduledAlarmTimeMillis", 0)
-
-            val shouldStartAlarm = if (isAlarmActive) {
-                // The alarm was ringing when the phone was powered off
-                true
-            } else if (scheduledAlarmTimeMillis > 0 && scheduledAlarmTimeMillis <= System.currentTimeMillis()) {
-                // The user missed the alarm while the phone was off
-                true
-            } else {
-                false
-            }
-
-            if (shouldStartAlarm) {
-                Log.d("WakeMeUp", "BootReceiver: Starting missed/interrupted alarm!")
+        val action = intent.action
+        if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_LOCKED_BOOT_COMPLETED || action == "android.intent.action.BOOT_COMPLETED") {
+            
+            val db = AlarmDatabase.getDatabase(context)
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                val activeAlarms = db.alarmDao().getActiveAlarms()
                 
-                // Start the alarm service immediately
-                val serviceIntent = Intent(context, AlarmService::class.java)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
+                for (alarm in activeAlarms) {
+                    val calendar = Calendar.getInstance()
+                    calendar.set(Calendar.HOUR_OF_DAY, alarm.hour)
+                    calendar.set(Calendar.MINUTE, alarm.minute)
+                    calendar.set(Calendar.SECOND, 0)
+                    calendar.set(Calendar.MILLISECOND, 0)
+                    
+                    if (calendar.timeInMillis <= System.currentTimeMillis()) {
+                        calendar.add(Calendar.DAY_OF_YEAR, 1)
+                    }
+                    
+                    // Note: For phase 1 we assume it triggers every day. 
+                    // To handle specific days of week, we would calculate the exact next day.
+                    
+                    val alarmIntent = Intent(context, AlarmReceiver::class.java).apply {
+                        putExtra("ALARM_ID", alarm.id)
+                    }
+                    
+                    val pendingIntent = PendingIntent.getBroadcast(
+                        context,
+                        alarm.id, // Use alarm ID as request code to distinguish multiple alarms
+                        alarmIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    
+                    try {
+                        alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            calendar.timeInMillis,
+                            pendingIntent
+                        )
+                        Log.d("Vivora", "Scheduled alarm ${alarm.id} for ${calendar.time}")
+                    } catch (e: SecurityException) {
+                        Log.e("Vivora", "Permission to schedule exact alarm denied", e)
+                    }
                 }
-                
-                // Launch the activity to show the math problems
-                val activityIntent = Intent(context, AlarmActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-                context.startActivity(activityIntent)
             }
         }
     }

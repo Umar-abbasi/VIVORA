@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WAKE ME UP"
+rootProject.name = "Vivora"
 include(":app")

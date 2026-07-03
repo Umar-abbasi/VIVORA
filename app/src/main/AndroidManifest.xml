@@ -41,6 +41,10 @@
             android:launchMode="singleInstance"
             android:excludeFromRecents="true" />
             
+        <activity
+            android:name=".AddAlarmActivity"
+            android:exported="false" />
+            
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"

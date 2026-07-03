@@ -3,12 +3,15 @@ package com.example.wakemeup
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import android.view.KeyEvent
+import androidx.lifecycle.lifecycleScope
+import com.example.wakemeup.data.AlarmDatabase
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 class AlarmActivity : AppCompatActivity() {
@@ -18,8 +21,10 @@ class AlarmActivity : AppCompatActivity() {
     private lateinit var submitAnswerButton: Button
     
     private var solvedCount = 0
-    private val requiredSolves = 10
+    private var requiredSolves = 10
     private var currentAnswer = 0
+    private var difficultyLevel = "Medium"
+    private var alarmId = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,8 +39,23 @@ class AlarmActivity : AppCompatActivity() {
         answerEditText = findViewById(R.id.answerEditText)
         submitAnswerButton = findViewById(R.id.submitAnswerButton)
         
-        generateNewProblem()
-        updateProgress()
+        alarmId = intent.getIntExtra("ALARM_ID", -1)
+        if (alarmId != -1) {
+            val db = AlarmDatabase.getDatabase(this)
+            lifecycleScope.launch {
+                val alarm = db.alarmDao().getAlarmById(alarmId)
+                if (alarm != null) {
+                    requiredSolves = alarm.numProblems
+                    difficultyLevel = alarm.difficultyLevel
+                }
+                
+                generateNewProblem()
+                updateProgress()
+            }
+        } else {
+            generateNewProblem()
+            updateProgress()
+        }
         
         submitAnswerButton.setOnClickListener {
             checkAnswer()
@@ -46,8 +66,14 @@ class AlarmActivity : AppCompatActivity() {
     }
     
     private fun generateNewProblem() {
-        val num1 = Random.nextInt(10, 100)
-        val num2 = Random.nextInt(10, 100)
+        val (min, max) = when (difficultyLevel) {
+            "Easy" -> Pair(1, 10)
+            "Hard" -> Pair(100, 1000)
+            else -> Pair(10, 100) // Medium
+        }
+        
+        val num1 = Random.nextInt(min, max)
+        val num2 = Random.nextInt(min, max)
         currentAnswer = num1 + num2
         mathProblemTextView.text = "$num1 + $num2 = ?"
         answerEditText.text.clear()
@@ -77,11 +103,17 @@ class AlarmActivity : AppCompatActivity() {
     }
     
     private fun stopAlarmAndFinish() {
-        val prefs = getSharedPreferences("AlarmPrefs", Context.MODE_PRIVATE)
-        prefs.edit()
-            .putBoolean("isAlarmActive", false)
-            .putLong("scheduledAlarmTimeMillis", 0)
-            .apply()
+        if (alarmId != -1) {
+            val db = AlarmDatabase.getDatabase(this)
+            lifecycleScope.launch {
+                val alarm = db.alarmDao().getAlarmById(alarmId)
+                if (alarm != null) {
+                    // Disable the alarm for next day unless it's a repeating alarm
+                    // Since Phase 1 handles simple scheduling, we can turn it off
+                    db.alarmDao().update(alarm.copy(isActive = false))
+                }
+            }
+        }
 
         val stopIntent = Intent(this, AlarmService::class.java).apply {
             action = "STOP_ALARM"
